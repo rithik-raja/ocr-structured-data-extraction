@@ -13,16 +13,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  runDeathCertificatePipeline,
+  type Highlight,
+} from "@/lib/deathCertPipeline";
 import { cn } from "@/lib/utils";
-
-type Highlight = {
-  id: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  text: string;
-};
 
 type UploadedCertificate = {
   id: string;
@@ -30,49 +25,6 @@ type UploadedCertificate = {
   imageUrl: string;
   highlights: Highlight[];
 };
-
-const FAKE_HIGHLIGHTS: Highlight[] = [
-  {
-    id: "h-name",
-    x: 0.07,
-    y: 0.15,
-    width: 0.34,
-    height: 0.05,
-    text: "Name: JOHN A DOE",
-  },
-  {
-    id: "h-dob",
-    x: 0.07,
-    y: 0.24,
-    width: 0.23,
-    height: 0.05,
-    text: "DOB: 02/14/1951",
-  },
-  {
-    id: "h-dod",
-    x: 0.07,
-    y: 0.31,
-    width: 0.24,
-    height: 0.05,
-    text: "Date of Death: 01/28/2026",
-  },
-  {
-    id: "h-ssn",
-    x: 0.55,
-    y: 0.24,
-    width: 0.22,
-    height: 0.05,
-    text: "SSN: XXX-XX-6789",
-  },
-  {
-    id: "h-address",
-    x: 0.55,
-    y: 0.32,
-    width: 0.33,
-    height: 0.09,
-    text: "Address: 123 Main St, Austin, TX",
-  },
-];
 
 function sleep(ms: number) {
   return new Promise((resolve) => {
@@ -82,24 +34,7 @@ function sleep(ms: number) {
 
 async function fakeProcessCertificate(): Promise<Highlight[]> {
   await sleep(1500);
-  return FAKE_HIGHLIGHTS;
-}
-
-function normalizeHighlights(highlights: Highlight[]) {
-  return highlights.map((highlight) => {
-    const x = Math.max(0, Math.min(1, highlight.x));
-    const y = Math.max(0, Math.min(1, highlight.y));
-    const width = Math.max(0, Math.min(1 - x, highlight.width));
-    const height = Math.max(0, Math.min(1 - y, highlight.height));
-
-    return {
-      ...highlight,
-      x,
-      y,
-      width,
-      height,
-    };
-  });
+  return runDeathCertificatePipeline();
 }
 
 export default function Home() {
@@ -130,9 +65,7 @@ export default function Home() {
 
       setUploads((prev) =>
         prev.map((upload) =>
-          upload.id === uploadId
-            ? { ...upload, highlights: normalizeHighlights(result) }
-            : upload
+          upload.id === uploadId ? { ...upload, highlights: result } : upload
         )
       );
     } finally {

@@ -1,4 +1,4 @@
-const tmpAzureOcr = {
+export const tmpAzureOcr = {
 	"status": "succeeded",
 	"createdDateTime": "2026-02-19T01:14:06Z",
 	"lastUpdatedDateTime": "2026-02-19T01:14:08Z",
