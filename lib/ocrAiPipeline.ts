@@ -1,8 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 
-import { tmpAzureOcr } from "@/lib/tmpAzureOcr";
-
 export type Highlight = {
   id: string;
   x: number;
@@ -15,6 +13,19 @@ export type Highlight = {
 type OcrWord = {
   content: string;
   polygon: number[];
+};
+
+type OcrPage = {
+  width: number;
+  height: number;
+  words: OcrWord[];
+};
+
+type AzureAnalyzeResult = {
+  status: string;
+  analyzeResult?: {
+    pages?: OcrPage[];
+  };
 };
 
 type Coordinate = [number, number];
@@ -50,11 +61,75 @@ const geminiClient = new GoogleGenAI({
   apiKey: process.env.NEXT_PUBLIC_DEMO_GEMINI_KEY,
 });
 
-function getOcrWordsAndPage() {
-  const page = tmpAzureOcr.analyzeResult.pages[0];
+async function analyzeWithAzureDocumentIntelligence(file: File) {
+  const azureKey = process.env.NEXT_PUBLIC_DEMO_AZURE_KEY;
+  const azureEndpoint = process.env.NEXT_PUBLIC_DEMO_AZURE_ENDPOINT;
+
+  if (!azureKey || !azureEndpoint) {
+    throw new Error(
+      "Missing Azure OCR configuration. Set NEXT_PUBLIC_DEMO_AZURE_KEY and NEXT_PUBLIC_DEMO_AZURE_ENDPOINT."
+    );
+  }
+
+  const normalizedEndpoint = azureEndpoint.replace(/\/+$/, "");
+  const apiVersion = "2024-11-30";
+  const analyzeUrl = `${normalizedEndpoint}/documentintelligence/documentModels/prebuilt-read:analyze?api-version=${apiVersion}`;
+
+  const startResponse = await fetch(analyzeUrl, {
+    method: "POST",
+    headers: {
+      "Ocp-Apim-Subscription-Key": azureKey,
+      "Content-Type": file.type || "application/octet-stream",
+    },
+    body: file,
+  });
+
+  if (!startResponse.ok) {
+    const details = await startResponse.text();
+    throw new Error(`Azure OCR analyze request failed: ${details}`);
+  }
+
+  const operationLocation = startResponse.headers.get("operation-location");
+  if (!operationLocation) {
+    throw new Error("Azure OCR response missing operation-location header.");
+  }
+
+  let pollResult: AzureAnalyzeResult | null = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const pollResponse = await fetch(operationLocation, {
+      headers: {
+        "Ocp-Apim-Subscription-Key": azureKey,
+      },
+    });
+
+    if (!pollResponse.ok) {
+      const details = await pollResponse.text();
+      throw new Error(`Azure OCR polling failed: ${details}`);
+    }
+
+    pollResult = (await pollResponse.json()) as AzureAnalyzeResult;
+    if (pollResult.status === "succeeded") {
+      break;
+    }
+    if (pollResult.status === "failed") {
+      throw new Error("Azure OCR analysis failed.");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  if (!pollResult || pollResult.status !== "succeeded") {
+    throw new Error("Azure OCR analysis timed out.");
+  }
+
+  const page = pollResult.analyzeResult?.pages?.[0];
+  if (!page || !page.words?.length) {
+    throw new Error("Azure OCR returned no words.");
+  }
+
   return {
     page,
-    words: page.words as OcrWord[],
+    words: page.words,
   };
 }
 
@@ -286,8 +361,12 @@ ${ocrLineText}`,
   return parsed.data;
 }
 
-export async function runDeathCertificatePipeline(): Promise<Highlight[]> {
-  const { page, words } = getOcrWordsAndPage();
+export async function runOcrAiPipeline(
+  file: File,
+  onOcrComplete?: () => void
+): Promise<Highlight[]> {
+  const { page, words } = await analyzeWithAzureDocumentIntelligence(file);
+  onOcrComplete?.();
   const ocrLineText = toTopLeftOcrLines(words);
   const fields = await extractFieldsFromGemini(ocrLineText);
 

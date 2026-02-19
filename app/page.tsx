@@ -14,14 +14,15 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  runDeathCertificatePipeline,
+  runOcrAiPipeline,
   type Highlight,
-} from "@/lib/deathCertPipeline";
+} from "@/lib/ocrAiPipeline";
 import { cn } from "@/lib/utils";
 
 type UploadedCertificate = {
   id: string;
   name: string;
+  file: File;
   imageUrl: string;
   highlights: Highlight[];
 };
@@ -32,15 +33,16 @@ function sleep(ms: number) {
   });
 }
 
-async function fakeProcessCertificate(): Promise<Highlight[]> {
+async function fakeProcessCertificate(file: File): Promise<Highlight[]> {
   await sleep(1500);
-  return runDeathCertificatePipeline();
+  return runOcrAiPipeline(file);
 }
 
 export default function Home() {
   const [uploads, setUploads] = useState<UploadedCertificate[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [processingUploadId, setProcessingUploadId] = useState<string | null>(null);
+  const [processingStage, setProcessingStage] = useState<"ocr" | "llm" | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const createdObjectUrlsRef = useRef<string[]>([]);
 
@@ -59,9 +61,17 @@ export default function Home() {
 
   async function runProcessing(uploadId: string) {
     setProcessingUploadId(uploadId);
+    setProcessingStage("ocr");
 
     try {
-      const result = await fakeProcessCertificate();
+      const upload = uploads.find((item) => item.id === uploadId);
+      if (!upload) {
+        return;
+      }
+
+      const result = await runOcrAiPipeline(upload.file, () => {
+        setProcessingStage("llm");
+      });
 
       setUploads((prev) =>
         prev.map((upload) =>
@@ -70,6 +80,7 @@ export default function Home() {
       );
     } finally {
       setProcessingUploadId(null);
+      setProcessingStage(null);
     }
   }
 
@@ -82,6 +93,7 @@ export default function Home() {
     const newUploads = files.map((file, index) => ({
       id: `${Date.now()}-${index}`,
       name: file.name,
+      file,
       imageUrl: URL.createObjectURL(file),
       highlights: [],
     }));
@@ -182,6 +194,12 @@ export default function Home() {
               {isProcessing && <Spinner className="size-4" />}
               Run Process
             </Button>
+            {processingStage === "ocr" && (
+              <p className="ml-3 text-sm text-muted-foreground">Running OCR...</p>
+            )}
+            {processingStage === "llm" && (
+              <p className="ml-3 text-sm text-muted-foreground">Running LLM...</p>
+            )}
           </div>
 
           <div className="flex min-h-0 flex-1 items-center justify-center p-6">
