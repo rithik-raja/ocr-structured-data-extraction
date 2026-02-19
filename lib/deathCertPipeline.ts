@@ -22,6 +22,7 @@ type Coordinate = [number, number];
 type FieldMatch = {
   word: string;
   coordinate: Coordinate;
+  groupId: number;
 };
 
 type ParsedFieldValues = {
@@ -35,6 +36,7 @@ const fieldItemSchema = z.array(
   z.object({
     word: z.string(),
     coordinate: z.tuple([z.number(), z.number()]),
+    groupId: z.number(),
   })
 );
 const parsedFieldsSchema = z.object({
@@ -66,25 +68,25 @@ function toTopLeftOcrLines(words: OcrWord[]) {
     .join("\n");
 }
 
-function wordToHighlight(
-  word: OcrWord,
+function wordsToHighlight(
+  groupWords: OcrWord[],
   pageWidth: number,
   pageHeight: number,
   text: string,
   id: string
 ) {
-  const allXs = [
+  const allXs = groupWords.flatMap((word) => [
     word.polygon[0],
     word.polygon[2],
     word.polygon[4],
     word.polygon[6],
-  ];
-  const allYs = [
+  ]);
+  const allYs = groupWords.flatMap((word) => [
     word.polygon[1],
     word.polygon[3],
     word.polygon[5],
     word.polygon[7],
-  ];
+  ]);
 
   const minX = Math.min(...allXs);
   const maxX = Math.max(...allXs);
@@ -130,21 +132,38 @@ function mapFieldListToHighlights(
     words.map((word) => [`${word.polygon[0] ?? 0},${word.polygon[1] ?? 0}`, word])
   );
 
-  return values
-    .map((value, index) => {
-      const [x, y] = value.coordinate;
-      const matchedWord = wordByTopLeft.get(`${x},${y}`);
-      if (matchedWord === undefined) {
-        return null;
-      }
-      return wordToHighlight(
-        matchedWord,
+  const groups = new Map<number, { words: string[]; ocrWords: OcrWord[] }>();
+
+  values.forEach((value) => {
+    const [x, y] = value.coordinate;
+    const matchedWord = wordByTopLeft.get(`${x},${y}`);
+    if (matchedWord === undefined) {
+      return;
+    }
+
+    const existing = groups.get(value.groupId);
+    if (existing) {
+      existing.words.push(value.word);
+      existing.ocrWords.push(matchedWord);
+      return;
+    }
+
+    groups.set(value.groupId, {
+      words: [value.word],
+      ocrWords: [matchedWord],
+    });
+  });
+
+  return [...groups.entries()]
+    .map(([groupId, group]) =>
+      wordsToHighlight(
+        group.ocrWords,
         pageWidth,
         pageHeight,
-        `${fieldLabel}: ${value.word}`,
-        `h-${fieldKey}-${index}`
-      );
-    })
+        `${fieldLabel}: ${group.words.join(" ")}`,
+        `h-${fieldKey}-g-${groupId}`
+      )
+    )
     .filter((highlight): highlight is Highlight => Boolean(highlight));
 }
 
@@ -194,22 +213,21 @@ function mapFieldsToHighlights(
 
 async function extractFieldsFromGemini(ocrLineText: string) {
   const fieldItemProperty = {
-    name: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          word: { type: "string" },
-          coordinate: {
-            type: "array",
-            prefixItems: [{ type: "number" }, { type: "number" }],
-            minItems: 2,
-            maxItems: 2,
-          },
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        word: { type: "string" },
+        coordinate: {
+          type: "array",
+          prefixItems: [{ type: "number" }, { type: "number" }],
+          minItems: 2,
+          maxItems: 2,
         },
-        required: ["text", "coordinate"],
+        groupId: { type: "number" },
       },
-    }
+      required: ["word", "coordinate", "groupId"],
+    },
   };
   const response = await geminiClient.models.generateContent({
     model: "gemini-2.5-flash",
@@ -228,6 +246,13 @@ Return JSON with these fields as lists:
 Each list item must have:
 - word: string (EXACTLY ONE word)
 - coordinate: [x, y] for that word
+- groupId: number
+
+Grouping rules:
+- Use the same groupId for words that belong to the same semantic value.
+- Example: if the person's name is "John Doe", both words must have the same groupId.
+- Use different groupId values for different semantic values within the same field.
+
 Each word and coordinate must exactly match values from OCR input.
 If no matches are found for a field, return [].
 
